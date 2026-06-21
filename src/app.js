@@ -6,7 +6,7 @@
 import { FOCUS_RANGE, PASS_THRESHOLD, STORAGE_KEYS } from './config.js';
 import { tokenize } from './normalize.js';
 import { getSurahList, getSurah, buildPassage } from './quran.js';
-import { startCapture, getChunk16k, stopCapture } from './audio.js';
+import { startRecording, stopRecording } from './audio.js';
 import { transcribe } from './asr.js';
 import { createEngine } from './engine.js';
 import { loadSrs, saveSrs, review, pickDue } from './srs.js';
@@ -157,7 +157,7 @@ function renderPassage() {
 async function onRecordClick() {
   if (!state.recording) {
     try {
-      await startCapture();
+      await startRecording();
     } catch (e) {
       setStatus('Accès micro refusé : ' + e.message);
       return;
@@ -174,25 +174,24 @@ async function onRecordClick() {
   // Arrêt → on récupère tout l'audio, on transcrit une fois, on aligne.
   state.recording = false;
   setRecordButton('working');
-  let chunk;
+  let rec;
   try {
-    chunk = await getChunk16k();
-    await stopCapture();
+    rec = await stopRecording();
   } catch (e) {
     setStatus('Problème micro : ' + e.message);
     setRecordButton('idle');
     return;
   }
-  if (!chunk || !chunk.audio.length) {
-    setStatus('Aucun son capté. Vérifiez l’autorisation du micro.');
-    setRecordButton('idle');
+  if (!rec.audio.length) {
+    setStatus(`Aucun son capté (${rec.bytes || 0} o). Vérifiez l’autorisation du micro.`);
+    setRecordButton('done');
     return;
   }
 
   if (!state.modelReady) showProgress('Préparation du modèle…');
-  setStatus('Analyse de la récitation…');
+  setStatus(`Analyse de la récitation… (${rec.durationSec.toFixed(1)} s captées)`);
   try {
-    const text = await transcribe(chunk.audio, onModelProgress);
+    const text = await transcribe(rec.audio, onModelProgress);
     state.modelReady = true;
     hideProgress();
     showDebug(text);

@@ -1,57 +1,54 @@
-// Captation micro CONTINUE pour le mode streaming.
-// On accumule l'audio dans un tampon défilant ; le streamer le re-transcrit
-// régulièrement et peut le rogner (trimSeconds) une fois des mots validés.
-// Tout reste local au navigateur ; rien n'est envoyé sur le réseau.
+// Captation micro via MediaRecorder (fiable PC + mobile), pour le flux
+// « enregistrer puis transcrire ». On enregistre dans un Blob, puis on décode
+// en mono 16 kHz (format attendu par Whisper). Rien ne quitte le navigateur.
 
-let cap = null;
+let mediaRecorder = null;
+let chunks = [];
+let stream = null;
 
-export async function startCapture() {
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+function pickMime() {
+  const cands = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg'];
+  if (window.MediaRecorder && MediaRecorder.isTypeSupported) {
+    for (const c of cands) if (MediaRecorder.isTypeSupported(c)) return c;
+  }
+  return '';
+}
+
+export async function startRecording() {
+  stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  chunks = [];
+  const mime = pickMime();
+  mediaRecorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+  mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) chunks.push(e.data); };
+  mediaRecorder.start();
+}
+
+// Arrête et renvoie { audio: Float32Array @16kHz, durationSec, bytes }.
+export function stopRecording() {
+  return new Promise((resolve, reject) => {
+    if (!mediaRecorder) { reject(new Error('aucun enregistrement en cours')); return; }
+    mediaRecorder.onstop = async () => {
+      try {
+        const blob = new Blob(chunks, { type: mediaRecorder.mimeType || 'audio/webm' });
+        if (stream) stream.getTracks().forEach((t) => t.stop());
+        if (blob.size === 0) { resolve({ audio: new Float32Array(0), durationSec: 0, bytes: 0 }); return; }
+        const { data, rate } = await decode(await blob.arrayBuffer());
+        const audio = await resampleTo16k(data, rate);
+        resolve({ audio, durationSec: data.length / rate, bytes: blob.size });
+      } catch (e) { reject(e); }
+    };
+    mediaRecorder.stop();
+  });
+}
+
+async function decode(arrayBuffer) {
   const AC = window.AudioContext || window.webkitAudioContext;
   const ctx = new AC();
-  const source = ctx.createMediaStreamSource(stream);
-  const processor = ctx.createScriptProcessor(4096, 1, 1);
-  cap = { samples: [], rate: ctx.sampleRate, stream, ctx, source, processor };
-
-  processor.onaudioprocess = (e) => {
-    const b = e.inputBuffer.getChannelData(0);
-    // Concatène le bloc courant au tampon.
-    const arr = cap.samples;
-    for (let i = 0; i < b.length; i++) arr.push(b[i]);
-  };
-  source.connect(processor);
-  processor.connect(ctx.destination);
-}
-
-// Renvoie le tampon courant ré-échantillonné en 16 kHz + son énergie (RMS),
-// pour décider de transcrire ou non (silence pur → on saute).
-export async function getChunk16k() {
-  if (!cap || cap.samples.length === 0) return null;
-  const f = Float32Array.from(cap.samples);
-  let sum = 0;
-  for (let i = 0; i < f.length; i++) sum += f[i] * f[i];
-  const rms = Math.sqrt(sum / f.length);
-  const audio = await resampleTo16k(f, cap.rate);
-  return { audio, rms, durationSec: f.length / cap.rate };
-}
-
-// Coupe les `sec` premières secondes du tampon (audio déjà validé).
-export function trimSeconds(sec) {
-  if (!cap) return;
-  const drop = Math.floor(sec * cap.rate);
-  if (drop > 0) cap.samples.splice(0, Math.min(drop, cap.samples.length));
-}
-
-export async function stopCapture() {
-  if (!cap) return;
   try {
-    cap.processor.disconnect();
-    cap.processor.onaudioprocess = null;
-    cap.source.disconnect();
-    cap.stream.getTracks().forEach((t) => t.stop());
-    await cap.ctx.close();
+    const decoded = await ctx.decodeAudioData(arrayBuffer);
+    return { data: decoded.getChannelData(0), rate: decoded.sampleRate };
   } finally {
-    cap = null;
+    await ctx.close();
   }
 }
 
