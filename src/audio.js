@@ -20,7 +20,22 @@ export async function startRecording() {
   const mime = pickMime();
   mediaRecorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
   mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) chunks.push(e.data); };
-  mediaRecorder.start();
+  // timeslice : on reçoit des morceaux réguliers → on peut transcrire en cours de route.
+  mediaRecorder.start(1000);
+}
+
+// Transcription partielle : décode tout l'audio capté jusqu'ici (pour le live).
+// Renvoie { audio, durationSec } ou null si pas encore décodable.
+export async function getPartial16k() {
+  if (!mediaRecorder || chunks.length === 0) return null;
+  try {
+    const blob = new Blob(chunks.slice(), { type: mediaRecorder.mimeType || 'audio/webm' });
+    if (blob.size === 0) return null;
+    const { data, rate } = await decode(await blob.arrayBuffer());
+    return { audio: await resampleTo16k(data, rate), durationSec: data.length / rate };
+  } catch {
+    return null; // morceaux pas encore décodables (header incomplet) → on réessaiera
+  }
 }
 
 // Arrête et renvoie { audio: Float32Array @16kHz, durationSec, bytes }.

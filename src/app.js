@@ -6,7 +6,7 @@
 import { FOCUS_RANGE, PASS_THRESHOLD, STORAGE_KEYS } from './config.js';
 import { tokenize } from './normalize.js';
 import { getSurahList, getSurah, buildPassage } from './quran.js';
-import { startRecording, stopRecording } from './audio.js';
+import { startRecording, stopRecording, getPartial16k } from './audio.js';
 import { transcribe } from './asr.js';
 import { createEngine } from './engine.js';
 import { loadSrs, saveSrs, review, pickDue } from './srs.js';
@@ -22,7 +22,11 @@ const state = {
   cueEnd: 0,
   recording: false,
   modelReady: false,
+  liveTimer: null,
+  ticking: false,
 };
+
+const HOP_MS = 2500; // fréquence de re-transcription en direct
 
 // ---------- Persistance des sourates apprises ----------
 
@@ -78,6 +82,8 @@ function learnedCandidates() {
 }
 
 async function nextDrill() {
+  if (state.liveTimer) { clearInterval(state.liveTimer); state.liveTimer = null; }
+  state.recording = false;
   const candidates = learnedCandidates();
   if (!candidates.length) { show('onboarding'); return; }
 
@@ -152,7 +158,30 @@ function renderPassage() {
   }
 }
 
-// ---------- Enregistrement + reconnaissance (une transcription à l'arrêt) ----------
+// ---------- Reconnaissance en direct (re-transcription périodique) ----------
+
+async function liveTick() {
+  if (!state.recording || state.ticking) return;
+  state.ticking = true;
+  try {
+    const part = await getPartial16k();
+    if (part && part.audio.length) {
+      const text = await transcribe(part.audio, onModelProgress);
+      state.modelReady = true;
+      hideProgress();
+      showDebug(text);
+      const hyp = tokenize(text);
+      if (hyp.length && state.recording) {
+        state.engine.applyLive(hyp);
+        renderPassage();
+        setStatus('Reconnaissance en direct…');
+      }
+    }
+  } catch { /* on réessaie au tick suivant */ }
+  finally { state.ticking = false; }
+}
+
+// ---------- Enregistrement + reconnaissance (analyse finale à l'arrêt) ----------
 
 async function onRecordClick() {
   if (!state.recording) {
@@ -165,14 +194,17 @@ async function onRecordClick() {
     state.recording = true;
     setRecordButton('recording');
     hideDebug();
+    state.liveTimer = setInterval(liveTick, HOP_MS);
     setStatus(state.modelReady
-      ? 'Récitez jusqu’à la fin de la sourate, puis appuyez sur Arrêter.'
-      : 'Récitez… (le modèle se charge au 1er usage, l’analyse suivra l’arrêt)');
+      ? 'Récitez… les mots s’allument au fur et à mesure.'
+      : 'Récitez… (le modèle se charge au 1er usage)');
     return;
   }
 
-  // Arrêt → on récupère tout l'audio, on transcrit une fois, on aligne.
+  // Arrêt → on stoppe le live, on transcrit tout une dernière fois, on aligne.
   state.recording = false;
+  if (state.liveTimer) { clearInterval(state.liveTimer); state.liveTimer = null; }
+  while (state.ticking) await new Promise((r) => setTimeout(r, 60));
   setRecordButton('working');
   let rec;
   try {

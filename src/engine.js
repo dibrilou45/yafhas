@@ -48,6 +48,21 @@ export function createEngine(passage) {
     cursor = expected.length;
   }
 
+  // Mode LIVE : aligne la récitation partielle, révèle/colore jusqu'au dernier mot
+  // atteint, et garde le reste MASQUÉ (pending) — essentiel pour la mémorisation.
+  function applyLive(hyp) {
+    const ops = align(expected, hyp);
+    const st = statusPerExpected(expected.length, ops);
+    let last = -1;
+    for (let i = 0; i < expected.length; i++) {
+      if (st[i] === 'correct' || st[i] === 'wrong') last = i;
+    }
+    for (let i = 0; i < expected.length; i++) {
+      status[i] = i <= last ? st[i] : 'pending';
+    }
+    cursor = last + 1;
+  }
+
   // À l'arrêt : tout ce qui reste après le curseur n'a pas été récité = manquant.
   function finalize() {
     for (let i = cursor; i < status.length; i++) {
@@ -59,6 +74,7 @@ export function createEngine(passage) {
     passage,
     processSegment,
     applyGlobal,
+    applyLive,
     finalize,
     getStatus: () => status,
     getCursor: () => cursor,
