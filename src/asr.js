@@ -31,3 +31,23 @@ export async function transcribe(float32, progressCallback) {
   });
   return (out.text || '').trim();
 }
+
+// Transcription MOT À MOT avec timestamps (utilisée par le streamer overlap-commit).
+// Renvoie [{ text, start, end }] (temps en secondes, relatifs au tampon fourni).
+export async function transcribeWords(float32, progressCallback) {
+  const transcriber = await getTranscriber(progressCallback);
+  const out = await transcriber(float32, {
+    language: ASR.LANGUAGE,
+    task: ASR.TASK,
+    return_timestamps: 'word',
+    chunk_length_s: 30,
+  });
+  const chunks = out.chunks || [];
+  return chunks
+    .map((c) => ({
+      text: (c.text || '').trim(),
+      start: c.timestamp && c.timestamp[0] != null ? c.timestamp[0] : 0,
+      end: c.timestamp && c.timestamp[1] != null ? c.timestamp[1] : 0,
+    }))
+    .filter((w) => w.text);
+}

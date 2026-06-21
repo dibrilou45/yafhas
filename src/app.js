@@ -1,15 +1,14 @@
-// Orchestration + interface de Yafhas.
+// Orchestration + interface de Yafhas (mode streaming).
 // Flux : onboarding (cocher les sourates mémorisées) → drill (on affiche le début
-// d'un verset, l'utilisateur le complète de mémoire à voix haute) → résultat
-// (chaque mot surligné juste/faux/manquant) → verset suivant (choisi par la
-// répétition espacée).
+// d'un verset, l'utilisateur récite EN CONTINU jusqu'à la fin de la sourate) →
+// validation live mot à mot (overlap-commit + curseur ancré) → sourate suivante.
 
-import { FOCUS_RANGE, PASS_THRESHOLD, STORAGE_KEYS } from './config.js';
+import { FOCUS_RANGE, PASS_THRESHOLD, STREAM, STORAGE_KEYS } from './config.js';
 import { tokenize } from './normalize.js';
-import { getSurahList, getSurah, prepareAyah } from './quran.js';
-import { startRecording, stopRecording } from './audio.js';
-import { transcribe } from './asr.js';
-import { align, statusPerExpected, score, extras } from './align.js';
+import { getSurahList, getSurah, buildPassage } from './quran.js';
+import { startCapture, stopCapture } from './audio.js';
+import { createStreamer } from './streaming.js';
+import { createEngine } from './engine.js';
 import { loadSrs, saveSrs, review, pickDue } from './srs.js';
 
 const $ = (sel) => document.querySelector(sel);
@@ -18,7 +17,10 @@ const state = {
   list: [],
   learned: new Set(),
   srs: loadSrs(),
-  current: null,   // { surah, surahName, ayah, pairs, cueCount }
+  current: null,   // { surah, surahName, surahEn, startAyah }
+  engine: null,
+  streamer: null,
+  cueEnd: 0,
   recording: false,
   modelReady: false,
 };
@@ -27,8 +29,7 @@ const state = {
 
 function loadLearned() {
   try {
-    const arr = JSON.parse(localStorage.getItem(STORAGE_KEYS.learned)) || [];
-    state.learned = new Set(arr);
+    state.learned = new Set(JSON.parse(localStorage.getItem(STORAGE_KEYS.learned)) || []);
   } catch { state.learned = new Set(); }
 }
 function saveLearned() {
@@ -38,15 +39,11 @@ function saveLearned() {
 // ---------- Vues ----------
 
 function show(view) {
-  for (const v of ['onboarding', 'revision']) {
-    $('#' + v).hidden = v !== view;
-  }
+  for (const v of ['onboarding', 'revision']) $('#' + v).hidden = v !== view;
 }
 
 function renderOnboarding() {
-  const focus = state.list.filter(
-    (s) => s.number >= FOCUS_RANGE.from && s.number <= FOCUS_RANGE.to
-  );
+  const focus = state.list.filter((s) => s.number >= FOCUS_RANGE.from && s.number <= FOCUS_RANGE.to);
   const grid = $('#surah-grid');
   grid.innerHTML = '';
   for (const s of focus) {
@@ -66,12 +63,10 @@ function updateStartButton() {
   const btn = $('#start-btn');
   const n = state.learned.size;
   btn.disabled = n === 0;
-  btn.textContent = n === 0
-    ? 'Cochez au moins une sourate'
-    : `Réviser (${n} sourate${n > 1 ? 's' : ''})`;
+  btn.textContent = n === 0 ? 'Cochez au moins une sourate' : `Réviser (${n} sourate${n > 1 ? 's' : ''})`;
 }
 
-// ---------- Drill ----------
+// ---------- Choix du passage à réviser ----------
 
 function learnedCandidates() {
   const out = [];
@@ -88,128 +83,142 @@ async function nextDrill() {
   if (!candidates.length) { show('onboarding'); return; }
 
   const pick = pickDue(state.srs, candidates);
-  setStatus('Chargement du verset…');
+  setStatus('Chargement de la sourate…');
 
   const surah = await getSurah(pick.surah);
   const meta = state.list.find((s) => s.number === pick.surah);
-  const ayahObj = surah.ayahs.find((a) => a.number === pick.ayah) || surah.ayahs[0];
-  const pairs = prepareAyah(pick.surah, ayahObj.text);
+  const passage = buildPassage(pick.surah, pick.ayah, surah.ayahs);
 
-  // Indice : on dévoile les 1 à 2 premiers mots, l'utilisateur complète le reste.
-  const cueCount = Math.min(pairs.length <= 3 ? 1 : 2, pairs.length);
-
+  state.engine = createEngine(passage);
   state.current = {
     surah: pick.surah,
     surahName: meta ? meta.name : '',
     surahEn: meta ? meta.en : '',
-    ayah: ayahObj.number,
-    pairs,
-    cueCount,
+    startAyah: pick.ayah,
   };
 
-  renderDrill();
-}
+  // Indice : 1 à 2 premiers mots du verset de départ.
+  const v0 = passage.verses[0];
+  const firstLen = v0.end - v0.start;
+  state.cueEnd = v0.start + Math.min(firstLen <= 3 ? 1 : 2, firstLen);
 
-function renderDrill() {
-  const c = state.current;
-  $('#drill-surah').textContent = c.surahEn;
-  $('#drill-surah-ar').textContent = c.surahName;
-  $('#drill-ayah').textContent = `verset ${c.ayah}`;
+  $('#drill-surah').textContent = meta ? meta.en : '';
+  $('#drill-surah-ar').textContent = meta ? meta.name : '';
+  $('#drill-ayah').textContent = `verset ${pick.ayah} → fin · ${passage.verses.length} v.`;
 
-  // Verset masqué : indice visible, reste caché sous des pastilles.
-  const verse = $('#verse');
-  verse.innerHTML = '';
-  verse.dataset.state = 'masked';
-  c.pairs.forEach((p, i) => {
-    const span = document.createElement('span');
-    span.className = 'word';
-    if (i < c.cueCount) {
-      span.classList.add('cue');
-      span.textContent = p.orig;
-    } else {
-      span.classList.add('masked');
-      span.textContent = '•'.repeat(Math.max(2, [...p.norm].length));
-    }
-    verse.appendChild(span);
-    verse.appendChild(document.createTextNode(' '));
-  });
-
-  $('#result-note').textContent = '';
-  setStatus('Récitez le verset à partir de l’indice, puis arrêtez.');
+  renderPassage();
+  setStatus('Récitez du verset indiqué jusqu’à la fin de la sourate.');
   setRecordButton('idle');
 }
 
-function revealResult(status, extraWords) {
-  const c = state.current;
-  const verse = $('#verse');
-  verse.dataset.state = 'revealed';
-  [...verse.querySelectorAll('.word')].forEach((span, i) => {
-    span.className = 'word';
-    span.textContent = c.pairs[i].orig;
-    if (i < c.cueCount) { span.classList.add('cue'); return; }
-    span.classList.add(status[i] || 'missing');
-  });
+// ---------- Rendu du passage ----------
 
-  const ratio = score(status);
-  const pct = Math.round(ratio * 100);
-  const success = ratio >= PASS_THRESHOLD;
-
-  state.srs = review(state.srs, c.surah, c.ayah, success);
-  saveSrs(state.srs);
-
-  let note = success
-    ? `Bien — ${pct}% de mots corrects.`
-    : `À retravailler — ${pct}% de mots corrects.`;
-  if (extraWords.length) note += ` (mots en trop : ${extraWords.length})`;
-  $('#result-note').textContent = note;
-  setStatus(success ? 'Verset validé. Au suivant quand vous voulez.' : 'On le reverra bientôt.');
+function toArabicNum(n) {
+  return String(n).replace(/\d/g, (d) => '٠١٢٣٤٥٦٧٨٩'[d]);
 }
 
-// ---------- Enregistrement + reconnaissance ----------
+function renderPassage() {
+  const eng = state.engine;
+  const p = eng.passage;
+  const status = eng.getStatus();
+  const cursor = eng.getCursor();
+  const el = $('#verse');
+  el.innerHTML = '';
+
+  for (const v of p.verses) {
+    for (let i = v.start; i < v.end; i++) {
+      const span = document.createElement('span');
+      span.className = 'word';
+      const st = status[i];
+      const isCue = i < state.cueEnd;
+      if (isCue) {
+        span.classList.add('cue');
+        span.textContent = p.tokens[i].orig;
+      } else if (st === 'pending' && i >= cursor) {
+        span.classList.add('masked');
+        span.textContent = '•'.repeat(Math.max(2, [...p.tokens[i].norm].length));
+      } else {
+        span.classList.add(st === 'pending' ? 'cue' : st);
+        span.textContent = p.tokens[i].orig;
+      }
+      el.appendChild(span);
+      el.appendChild(document.createTextNode(' '));
+    }
+    const mark = document.createElement('span');
+    mark.className = 'ayah-mark';
+    mark.textContent = '۝' + toArabicNum(v.ayah);
+    el.appendChild(mark);
+    el.appendChild(document.createTextNode(' '));
+  }
+}
+
+// ---------- Enregistrement streaming ----------
+
+function onCommit(words) {
+  const hyp = tokenize(words.join(' '));
+  if (!hyp.length) return;
+  state.engine.processSegment(hyp, STREAM.WINDOW_SLACK);
+  state.modelReady = true;
+  hideProgress();
+  renderPassage();
+  setStatus(`Récitation… ${state.engine.getCursor()}/${state.engine.total} mots reconnus.`);
+  if (state.engine.isDone()) finalizePassage();
+}
 
 async function onRecordClick() {
-  if (state.recording) {
-    setRecordButton('working');
-    setStatus('Analyse de la récitation…');
-    state.recording = false;
-    let float;
+  if (!state.recording) {
     try {
-      float = await stopRecording();
+      await startCapture();
     } catch (e) {
-      setStatus('Micro indisponible : ' + e.message);
-      setRecordButton('idle');
+      setStatus('Accès micro refusé : ' + e.message);
       return;
     }
-    try {
-      const text = await transcribe(float, onModelProgress);
-      state.modelReady = true;
-      hideProgress();
-      const hyp = tokenize(text);
-      const expected = state.current.pairs.map((p) => p.norm);
-      const ops = align(expected, hyp);
-      const status = statusPerExpected(expected.length, ops);
-      revealResult(status, extras(ops));
-    } catch (e) {
-      hideProgress();
-      setStatus('Erreur de reconnaissance : ' + e.message);
-    }
-    setRecordButton('done');
+    state.streamer = createStreamer({ onCommit, onProgress: onModelProgress });
+    state.streamer.start();
+    state.recording = true;
+    setRecordButton('recording');
+    setStatus(state.modelReady
+      ? 'Récitez en continu jusqu’à la fin de la sourate…'
+      : 'Récitez… (le modèle se charge en arrière-plan au 1er usage)');
     return;
   }
 
-  // Démarrage
+  // Arrêt
+  setRecordButton('working');
+  setStatus('Finalisation…');
+  state.recording = false;
   try {
-    await startRecording();
-    state.recording = true;
-    setRecordButton('recording');
-    if (!state.modelReady) setStatus('Récitez… (le modèle se charge en arrière-plan au 1er usage)');
-    else setStatus('Récitez… appuyez pour arrêter.');
-  } catch (e) {
-    setStatus('Accès micro refusé : ' + e.message);
-  }
+    await state.streamer.stop();
+    await stopCapture();
+  } catch (e) { /* ignore */ }
+  renderPassage();
+  finalizePassage();
+  setRecordButton('done');
 }
 
-// ---------- Petits utilitaires d'UI ----------
+function finalizePassage() {
+  const eng = state.engine;
+  eng.finalize();
+  renderPassage();
+
+  const status = eng.getStatus();
+  // Répétition espacée : un verset est réussi si la plupart de ses mots sont corrects.
+  for (const v of eng.passage.verses) {
+    let correct = 0;
+    const total = v.end - v.start;
+    for (let i = v.start; i < v.end; i++) if (status[i] === 'correct') correct++;
+    const ok = total ? correct / total >= PASS_THRESHOLD : false;
+    state.srs = review(state.srs, state.current.surah, v.ayah, ok);
+  }
+  saveSrs(state.srs);
+
+  const total = status.length;
+  const correct = status.filter((s) => s === 'correct').length;
+  const pct = total ? Math.round((correct / total) * 100) : 0;
+  setStatus(`Terminé — ${pct}% des mots corrects sur ${eng.passage.verses.length} versets.`);
+}
+
+// ---------- Utilitaires d'UI ----------
 
 function setStatus(msg) { $('#status').textContent = msg; }
 
@@ -217,10 +226,10 @@ function setRecordButton(mode) {
   const btn = $('#record-btn');
   btn.classList.remove('recording', 'working');
   btn.disabled = false;
-  if (mode === 'idle') { btn.textContent = '● Réciter'; }
+  if (mode === 'idle') btn.textContent = '● Réciter';
   else if (mode === 'recording') { btn.textContent = '■ Arrêter'; btn.classList.add('recording'); }
   else if (mode === 'working') { btn.textContent = '…'; btn.classList.add('working'); btn.disabled = true; }
-  else if (mode === 'done') { btn.textContent = '● Recommencer'; }
+  else if (mode === 'done') btn.textContent = '● Recommencer';
 }
 
 function onModelProgress(p) {
@@ -249,23 +258,19 @@ async function init() {
     updateStartButton();
   });
 
-  $('#start-btn').addEventListener('click', async () => {
-    show('revision');
-    await nextDrill();
-  });
+  $('#start-btn').addEventListener('click', async () => { show('revision'); await nextDrill(); });
   $('#back-btn').addEventListener('click', () => { renderOnboarding(); show('onboarding'); });
   $('#next-btn').addEventListener('click', () => nextDrill());
   $('#reveal-btn').addEventListener('click', () => {
-    const c = state.current;
-    if (!c) return;
-    revealResult(new Array(c.pairs.length).fill('missing'), []);
+    state.cueEnd = state.engine ? state.engine.passage.tokens.length : 0;
+    renderPassage();
   });
   $('#record-btn').addEventListener('click', onRecordClick);
 
   try {
     state.list = await getSurahList();
     renderOnboarding();
-  } catch (e) {
+  } catch {
     setStatus('Impossible de charger la liste des sourates (réseau ?).');
   }
 }

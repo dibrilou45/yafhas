@@ -41,6 +41,22 @@ export async function getSurah(n) {
   return data;
 }
 
+// Construit un PASSAGE continu : du verset de départ jusqu'à la fin de la sourate.
+// Renvoie une liste plate de tokens {orig, norm, ayah} + les bornes de chaque
+// verset, pour le mode streaming.
+export function buildPassage(surahNumber, startAyah, ayahObjs) {
+  const tokens = [];
+  const verses = [];
+  for (const a of ayahObjs) {
+    if (a.number < startAyah) continue;
+    const pairs = prepareAyah(surahNumber, a.text);
+    const start = tokens.length;
+    for (const p of pairs) tokens.push({ orig: p.orig, norm: p.norm, ayah: a.number });
+    verses.push({ ayah: a.number, start, end: tokens.length });
+  }
+  return { tokens, verses };
+}
+
 // Retourne le verset prêt pour le drill : jetons appariés {orig, norm}, basmala
 // retirée si elle a été préfixée au 1er verset (hors sourate 1).
 export function prepareAyah(surahNumber, ayahText) {
