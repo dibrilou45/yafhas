@@ -1,0 +1,144 @@
+/* Yafhas — palette calme et studieuse, mobile-first. */
+:root {
+  --bg: #faf8f3;
+  --panel: #fffdf8;
+  --line: #e7e1d3;
+  --line2: #d8d1be;
+  --ink: #25221c;
+  --ink2: #514c40;
+  --mut: #847d6b;
+  --acc: #4a7c59;       /* vert sobre */
+  --acc-d: #3a6347;
+  --correct: #4a7c59;
+  --correct-bg: #e8f0e7;
+  --wrong: #b3493f;
+  --wrong-bg: #f6e6e2;
+  --missing: #b08a2e;
+  --missing-bg: #f4ecd8;
+  --radius: 14px;
+  --font: 'Inter', system-ui, sans-serif;
+  --font-ar: 'Amiri', serif;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font);
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+.topbar {
+  padding: 18px 20px 10px;
+  text-align: center;
+  border-bottom: 1px solid var(--line);
+}
+.brand { font-size: 26px; font-weight: 700; letter-spacing: -.02em; }
+.brand .dot { color: var(--acc); }
+.tagline { margin: 2px 0 0; font-size: 12.5px; color: var(--mut); }
+
+.wrap { max-width: 720px; margin: 0 auto; padding: 22px 18px 40px; }
+
+h1 { font-size: 22px; font-weight: 700; letter-spacing: -.01em; margin: 6px 0 8px; }
+.lead { color: var(--ink2); font-size: 15px; margin: 0 0 20px; }
+
+/* --- Onboarding --- */
+.surah-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  margin-bottom: 22px;
+}
+@media (min-width: 520px) { .surah-grid { grid-template-columns: 1fr 1fr; } }
+
+.surah {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 13px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  cursor: pointer;
+  transition: border-color .15s, background .15s;
+}
+.surah.is-on { border-color: var(--acc); background: var(--correct-bg); }
+.surah input { width: 18px; height: 18px; accent-color: var(--acc); flex: none; }
+.surah-name { font-family: var(--font-ar); font-size: 20px; line-height: 1; }
+.surah-meta { margin-left: auto; font-size: 11.5px; color: var(--mut); text-align: right; }
+
+/* --- Boutons --- */
+.btn {
+  font-family: var(--font);
+  font-weight: 600;
+  font-size: 15px;
+  padding: 12px 20px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: transform .12s, filter .12s, background .15s;
+}
+.btn:active { transform: translateY(1px); }
+.btn.primary { background: var(--acc); color: #fff; }
+.btn.primary:hover { filter: brightness(1.07); }
+.btn.primary:disabled { background: var(--line2); color: var(--mut); cursor: not-allowed; }
+.btn.ghost { background: transparent; border-color: var(--line2); color: var(--ink2); }
+.btn.small { font-size: 13px; padding: 7px 12px; }
+.btn.record { background: var(--ink); color: #fff; min-width: 130px; }
+.btn.record.recording { background: var(--wrong); }
+.btn.record.working { background: var(--mut); }
+#start-btn { width: 100%; }
+
+/* --- Drill --- */
+.drill-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; margin-bottom: 18px;
+}
+.drill-id { font-size: 12.5px; color: var(--mut); text-align: right; }
+.drill-surah-ar { font-family: var(--font-ar); font-size: 19px; color: var(--ink); margin-left: 6px; }
+
+.verse {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 26px 22px;
+  font-family: var(--font-ar);
+  font-size: clamp(26px, 7vw, 36px);
+  line-height: 2.1;
+  text-align: center;
+  min-height: 120px;
+}
+.word { padding: 2px 5px; border-radius: 7px; transition: background .2s, color .2s; }
+.word.cue { color: var(--acc-d); font-weight: 700; }
+.word.masked { color: var(--line2); letter-spacing: 2px; }
+.verse[data-state="revealed"] .word.correct { color: var(--correct); }
+.verse[data-state="revealed"] .word.wrong { color: var(--wrong); background: var(--wrong-bg); }
+.verse[data-state="revealed"] .word.missing { color: var(--missing); background: var(--missing-bg); }
+
+.result-note { text-align: center; font-weight: 600; min-height: 22px; margin: 14px 0 2px; }
+.status { text-align: center; color: var(--mut); font-size: 13.5px; min-height: 20px; margin: 0; }
+.progress { text-align: center; color: var(--acc-d); font-size: 13px; margin: 4px 0 0; }
+
+.controls {
+  display: flex; flex-wrap: wrap; gap: 10px; justify-content: center;
+  margin: 18px 0 8px;
+}
+
+.legend { display: flex; gap: 8px; justify-content: center; margin-top: 6px; }
+.chip {
+  font-size: 11.5px; font-weight: 600; padding: 3px 10px; border-radius: 20px;
+}
+.chip.correct { color: var(--correct); background: var(--correct-bg); }
+.chip.wrong { color: var(--wrong); background: var(--wrong-bg); }
+.chip.missing { color: var(--missing); background: var(--missing-bg); }
+
+.foot {
+  text-align: center; font-size: 11.5px; color: var(--mut);
+  padding: 18px; border-top: 1px solid var(--line);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; }
+}

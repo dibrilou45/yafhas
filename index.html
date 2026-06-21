@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Yafhas — réviser sa mémorisation du Coran</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Amiri:wght@400;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="assets/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">Yafhas<span class="dot">.</span></div>
+    <p class="tagline">révision de mémorisation — 100% dans votre navigateur</p>
+  </header>
+
+  <main class="wrap">
+
+    <!-- ÉTAPE 1 : onboarding -->
+    <section id="onboarding">
+      <h1>Quelles sourates avez-vous mémorisées&nbsp;?</h1>
+      <p class="lead">Cochez-les. L’app vous proposera ensuite le début d’un verset à compléter
+        de mémoire, à voix haute — et vérifiera mot à mot. Périmètre du POC : Juz’ ‘Amma.</p>
+      <div id="surah-grid" class="surah-grid"></div>
+      <button id="start-btn" class="btn primary" disabled>Cochez au moins une sourate</button>
+    </section>
+
+    <!-- ÉTAPE 2 : drill -->
+    <section id="revision" hidden>
+      <div class="drill-head">
+        <button id="back-btn" class="btn ghost small">‹ Mes sourates</button>
+        <div class="drill-id">
+          <span id="drill-surah-ar" lang="ar" dir="rtl" class="drill-surah-ar"></span>
+          <span id="drill-surah"></span> · <span id="drill-ayah"></span>
+        </div>
+      </div>
+
+      <div id="verse" class="verse" lang="ar" dir="rtl" data-state="masked"></div>
+
+      <p id="result-note" class="result-note"></p>
+      <p id="status" class="status"></p>
+      <p id="progress" class="progress" hidden></p>
+
+      <div class="controls">
+        <button id="record-btn" class="btn record">● Réciter</button>
+        <button id="reveal-btn" class="btn ghost">Voir le verset</button>
+        <button id="next-btn" class="btn primary">Suivant ›</button>
+      </div>
+
+      <p class="legend">
+        <span class="chip correct">correct</span>
+        <span class="chip wrong">erreur</span>
+        <span class="chip missing">manquant</span>
+      </p>
+    </section>
+
+  </main>
+
+  <footer class="foot">
+    Aucune donnée ne quitte votre appareil. Texte du mushaf : AlQuran.cloud · Reconnaissance : Whisper (transformers.js).
+  </footer>
+
+  <script type="module" src="src/app.js"></script>
+</body>
+</html>
