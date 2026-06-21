@@ -3,11 +3,11 @@
 // d'un verset, l'utilisateur récite EN CONTINU jusqu'à la fin de la sourate) →
 // validation live mot à mot (overlap-commit + curseur ancré) → sourate suivante.
 
-import { FOCUS_RANGE, PASS_THRESHOLD, STREAM, STORAGE_KEYS } from './config.js';
+import { FOCUS_RANGE, PASS_THRESHOLD, STORAGE_KEYS } from './config.js';
 import { tokenize } from './normalize.js';
 import { getSurahList, getSurah, buildPassage } from './quran.js';
-import { startCapture, stopCapture } from './audio.js';
-import { createStreamer } from './streaming.js';
+import { startCapture, getChunk16k, stopCapture } from './audio.js';
+import { transcribe } from './asr.js';
 import { createEngine } from './engine.js';
 import { loadSrs, saveSrs, review, pickDue } from './srs.js';
 
@@ -19,7 +19,6 @@ const state = {
   srs: loadSrs(),
   current: null,   // { surah, surahName, surahEn, startAyah }
   engine: null,
-  streamer: null,
   cueEnd: 0,
   recording: false,
   modelReady: false,
@@ -107,6 +106,7 @@ async function nextDrill() {
   $('#drill-ayah').textContent = `verset ${pick.ayah} → fin · ${passage.verses.length} v.`;
 
   renderPassage();
+  hideDebug();
   setStatus('Récitez du verset indiqué jusqu’à la fin de la sourate.');
   setRecordButton('idle');
 }
@@ -152,18 +152,7 @@ function renderPassage() {
   }
 }
 
-// ---------- Enregistrement streaming ----------
-
-function onCommit(words) {
-  const hyp = tokenize(words.join(' '));
-  if (!hyp.length) return;
-  state.engine.processSegment(hyp, STREAM.WINDOW_SLACK);
-  state.modelReady = true;
-  hideProgress();
-  renderPassage();
-  setStatus(`Récitation… ${state.engine.getCursor()}/${state.engine.total} mots reconnus.`);
-  if (state.engine.isDone()) finalizePassage();
-}
+// ---------- Enregistrement + reconnaissance (une transcription à l'arrêt) ----------
 
 async function onRecordClick() {
   if (!state.recording) {
@@ -173,26 +162,55 @@ async function onRecordClick() {
       setStatus('Accès micro refusé : ' + e.message);
       return;
     }
-    state.streamer = createStreamer({ onCommit, onProgress: onModelProgress });
-    state.streamer.start();
     state.recording = true;
     setRecordButton('recording');
+    hideDebug();
     setStatus(state.modelReady
-      ? 'Récitez en continu jusqu’à la fin de la sourate…'
-      : 'Récitez… (le modèle se charge en arrière-plan au 1er usage)');
+      ? 'Récitez jusqu’à la fin de la sourate, puis appuyez sur Arrêter.'
+      : 'Récitez… (le modèle se charge au 1er usage, l’analyse suivra l’arrêt)');
     return;
   }
 
-  // Arrêt
-  setRecordButton('working');
-  setStatus('Finalisation…');
+  // Arrêt → on récupère tout l'audio, on transcrit une fois, on aligne.
   state.recording = false;
+  setRecordButton('working');
+  let chunk;
   try {
-    await state.streamer.stop();
+    chunk = await getChunk16k();
     await stopCapture();
-  } catch (e) { /* ignore */ }
-  renderPassage();
-  finalizePassage();
+  } catch (e) {
+    setStatus('Problème micro : ' + e.message);
+    setRecordButton('idle');
+    return;
+  }
+  if (!chunk || !chunk.audio.length) {
+    setStatus('Aucun son capté. Vérifiez l’autorisation du micro.');
+    setRecordButton('idle');
+    return;
+  }
+
+  if (!state.modelReady) showProgress('Préparation du modèle…');
+  setStatus('Analyse de la récitation…');
+  try {
+    const text = await transcribe(chunk.audio, onModelProgress);
+    state.modelReady = true;
+    hideProgress();
+    showDebug(text);
+
+    const hyp = tokenize(text);
+    if (!hyp.length) {
+      setStatus('Aucune parole arabe reconnue — parlez plus près du micro, ou réessayez.');
+      setRecordButton('done');
+      return;
+    }
+    // Alignement global du passage : on passe toute la récitation en une fois.
+    state.engine.processSegment(hyp, state.engine.total);
+    renderPassage();
+    finalizePassage();
+  } catch (e) {
+    hideProgress();
+    setStatus('Erreur de reconnaissance : ' + e.message);
+  }
   setRecordButton('done');
 }
 
@@ -215,7 +233,11 @@ function finalizePassage() {
   const total = status.length;
   const correct = status.filter((s) => s === 'correct').length;
   const pct = total ? Math.round((correct / total) * 100) : 0;
-  setStatus(`Terminé — ${pct}% des mots corrects sur ${eng.passage.verses.length} versets.`);
+  if (correct === 0) {
+    setStatus('Aucun mot reconnu comme correct. Comparez avec « entendu » ci-dessous : si le texte est faux, c’est le modèle ASR qu’il faut améliorer.');
+  } else {
+    setStatus(`Terminé — ${pct}% des mots corrects sur ${eng.passage.verses.length} versets.`);
+  }
 }
 
 // ---------- Utilitaires d'UI ----------
@@ -241,6 +263,13 @@ function onModelProgress(p) {
 }
 function showProgress(msg) { const el = $('#progress'); el.hidden = false; el.textContent = msg; }
 function hideProgress() { $('#progress').hidden = true; }
+
+function showDebug(text) {
+  const el = $('#debug');
+  el.hidden = false;
+  el.textContent = 'entendu : ' + (text && text.trim() ? text.trim() : '(rien)');
+}
+function hideDebug() { const el = $('#debug'); el.hidden = true; el.textContent = ''; }
 
 // ---------- Init ----------
 
