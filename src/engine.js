@@ -6,7 +6,7 @@
 // l'aligne sur une petite fenêtre autour du curseur et on avance. Comme on se
 // ré-ancre à chaque pause, la dérive de l'ASR ne peut pas s'accumuler.
 
-import { streamAlign } from './align.js';
+import { streamAlign, align, statusPerExpected } from './align.js';
 
 export function createEngine(passage) {
   // passage : { tokens:[{orig, norm, ayah}], verses:[{ayah, start, end}] }
@@ -38,6 +38,16 @@ export function createEngine(passage) {
     };
   }
 
+  // Mode "une seule passe" : on aligne TOUTE la récitation sur TOUT le passage
+  // avec l'alignement global (Needleman-Wunsch) — bien plus robuste qu'un
+  // alignement à fin libre quand l'hypothèse est longue et bruitée.
+  function applyGlobal(hyp) {
+    const ops = align(expected, hyp);
+    const st = statusPerExpected(expected.length, ops);
+    for (let i = 0; i < expected.length; i++) status[i] = st[i];
+    cursor = expected.length;
+  }
+
   // À l'arrêt : tout ce qui reste après le curseur n'a pas été récité = manquant.
   function finalize() {
     for (let i = cursor; i < status.length; i++) {
@@ -48,6 +58,7 @@ export function createEngine(passage) {
   return {
     passage,
     processSegment,
+    applyGlobal,
     finalize,
     getStatus: () => status,
     getCursor: () => cursor,

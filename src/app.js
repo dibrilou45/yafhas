@@ -202,8 +202,8 @@ async function onRecordClick() {
       setRecordButton('done');
       return;
     }
-    // Alignement global du passage : on passe toute la récitation en une fois.
-    state.engine.processSegment(hyp, state.engine.total);
+    // Alignement global du passage : toute la récitation alignée sur tout le texte.
+    state.engine.applyGlobal(hyp);
     renderPassage();
     finalizePassage();
   } catch (e) {
